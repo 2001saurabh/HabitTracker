@@ -8,20 +8,30 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState("current"); // "current", "history", "backup"
   const [tableMode, setTableMode] = useState("weekday"); // "weekday" or "weekend"
   const [selectedMonthIdx, setSelectedMonthIdx] = useState(0); // 0 is Aug 2026
-  const [data, setData] = useState({}); // { "2026-08-10_wake_7am": true }
+  const [data, setData] = useState({}); // { "2026-08-10_wake_7am": "done" | "missed" }
   const [identityText, setIdentityText] = useState(
     "I am disciplined, clear, and intentional. I do what I say. Every time."
   );
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [todayStr, setTodayStr] = useState("");
+  const [currentHHMM, setCurrentHHMM] = useState("00:00");
 
-  // Load from localStorage on mount
+  // Load state and run time clock
   useEffect(() => {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, "0");
-    const dd = String(today.getDate()).padStart(2, "0");
-    setTodayStr(`${yyyy}-${mm}-${dd}`);
+    const updateTime = () => {
+      const today = new Date();
+      const yyyy = today.getFullYear();
+      const mm = String(today.getMonth() + 1).padStart(2, "0");
+      const dd = String(today.getDate()).padStart(2, "0");
+      setTodayStr(`${yyyy}-${mm}-${dd}`);
+
+      const hh = String(today.getHours()).padStart(2, "0");
+      const min = String(today.getMinutes()).padStart(2, "0");
+      setCurrentHHMM(`${hh}:${min}`);
+    };
+
+    updateTime();
+    const interval = setInterval(updateTime, 30000); // refresh time every 30s
 
     const savedData = localStorage.getItem("habit_tracker_data");
     if (savedData) {
@@ -39,19 +49,60 @@ export default function Home() {
     const savedIdentity = localStorage.getItem("habit_tracker_identity");
     if (savedIdentity) setIdentityText(savedIdentity);
 
-    // Set month index matching current month if within range
+    const today = new Date();
     const currentMonth = MONTHS.findIndex(
-      (m) => m.year === yyyy && m.month === today.getMonth() + 1
+      (m) => m.year === today.getFullYear() && m.month === today.getMonth() + 1
     );
     if (currentMonth !== -1) setSelectedMonthIdx(currentMonth);
+
+    return () => clearInterval(interval);
   }, []);
 
-  // Save data to localStorage
-  const toggleHabit = (dateStr, habitId) => {
+  // 3-State Click Handler: pending -> "done" -> "missed" -> pending
+  const toggleHabitState = (dateStr, habitId) => {
     const key = `${dateStr}_${habitId}`;
-    const newData = { ...data, [key]: !data[key] };
+    const currentVal = data[key];
+
+    let nextVal;
+    if (!currentVal || currentVal === "pending") {
+      nextVal = "done";
+    } else if (currentVal === "done") {
+      nextVal = "missed";
+    } else {
+      nextVal = undefined; // back to pending / default
+    }
+
+    const newData = { ...data };
+    if (nextVal) newData[key] = nextVal;
+    else delete newData[key];
+
     setData(newData);
     localStorage.setItem("habit_tracker_data", JSON.stringify(newData));
+  };
+
+  // Determine Effective State of a Habit Cell (Manual state OR Auto-Missed for past time)
+  const getCellState = (dateStr, habit) => {
+    const key = `${dateStr}_${habit.id}`;
+    const userVal = data[key];
+
+    // Explicit user action always overrides automatic logic
+    if (userVal === "done") return { state: "done", icon: "✓", label: "Done" };
+    if (userVal === "missed") return { state: "missed", icon: "✕", label: "Missed" };
+
+    // Automatic Past Time Logic
+    if (dateStr < todayStr) {
+      // Past day un-checked habit -> Auto Missed
+      return { state: "auto-missed", icon: "✕", label: "Missed (Past Day)" };
+    }
+
+    if (dateStr === todayStr) {
+      // Today: Check if scheduled habit time has passed
+      if (currentHHMM > habit.time) {
+        return { state: "auto-missed", icon: "✕", label: "Missed (Time Passed)" };
+      }
+    }
+
+    return { state: "pending", icon: "", label: "Pending" };
   };
 
   const toggleTheme = () => {
@@ -105,8 +156,7 @@ export default function Home() {
   // Generate days for selected month
   const currentMonthInfo = MONTHS[selectedMonthIdx] || MONTHS[0];
   const daysInMonth = new Date(currentMonthInfo.year, currentMonthInfo.month, 0).getDate();
-  
-  const allDays = [];
+
   const weekdayDays = [];
   const weekendDays = [];
 
@@ -126,7 +176,6 @@ export default function Home() {
       dayLabel: ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"][dayOfWeek]
     };
 
-    allDays.push(dayMeta);
     if (dayMeta.isWeekend) weekendDays.push(dayMeta);
     else weekdayDays.push(dayMeta);
   }
@@ -138,21 +187,25 @@ export default function Home() {
   const computeDayScore = (dayMeta) => {
     const habitsList = dayMeta.isWeekend ? WEEKEND_HABITS : WEEKDAY_HABITS;
     let done = 0;
+    let missed = 0;
     let applicable = 0;
 
     habitsList.forEach((h) => {
       if (habitApplies(h.applies, dayMeta.dateObj)) {
         applicable++;
-        if (data[`${dayMeta.dateStr}_${h.id}`]) done++;
+        const cell = getCellState(dayMeta.dateStr, h);
+        if (cell.state === "done") done++;
+        else if (cell.state === "missed" || cell.state === "auto-missed") missed++;
       }
     });
 
-    return { done, applicable, pct: applicable ? Math.round((done / applicable) * 100) : 0 };
+    return { done, missed, applicable, pct: applicable ? Math.round((done / applicable) * 100) : 0 };
   };
 
   const computeMonthStats = (monthObj) => {
     const days = new Date(monthObj.year, monthObj.month, 0).getDate();
     let totalDone = 0;
+    let totalMissed = 0;
     let totalApplicable = 0;
 
     for (let d = 1; d <= days; d++) {
@@ -166,13 +219,16 @@ export default function Home() {
       habitsList.forEach((h) => {
         if (habitApplies(h.applies, dateObj)) {
           totalApplicable++;
-          if (data[`${dateStr}_${h.id}`]) totalDone++;
+          const cell = getCellState(dateStr, h);
+          if (cell.state === "done") totalDone++;
+          else if (cell.state === "missed" || cell.state === "auto-missed") totalMissed++;
         }
       });
     }
 
     return {
       done: totalDone,
+      missed: totalMissed,
       applicable: totalApplicable,
       pct: totalApplicable ? Math.round((totalDone / totalApplicable) * 100) : 0
     };
@@ -182,7 +238,7 @@ export default function Home() {
     dateStr: todayStr,
     dateObj: new Date(),
     isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6
-  }) : { done: 0, applicable: 0, pct: 0 };
+  }) : { done: 0, missed: 0, applicable: 0, pct: 0 };
 
   const currentMonthStats = computeMonthStats(currentMonthInfo);
 
@@ -206,7 +262,9 @@ export default function Home() {
           </div>
           <div>
             <h1 style={{ fontSize: "24px", fontWeight: "700", letterSpacing: "-0.5px" }}>Life Design Habit Tracker</h1>
-            <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Science-backed WFH Routine & Performance System</p>
+            <p style={{ fontSize: "13px", color: "var(--text-secondary)" }}>
+              Live Time: <span style={{ color: "#8b5cf6", fontWeight: "700" }}>{currentHHMM}</span> · Auto-Missed Time Detection Enabled
+            </p>
           </div>
         </div>
 
@@ -269,23 +327,30 @@ export default function Home() {
       {/* Quick Stats Bar */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px", marginBottom: "24px" }}>
         <div className="glass-card" style={{ padding: "16px" }}>
-          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Today's Progress</span>
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Today's Done Rate</span>
           <div style={{ fontSize: "28px", fontWeight: "800", color: "#10b981", marginTop: "4px" }}>
             {todayScore.pct}% <span style={{ fontSize: "14px", color: "var(--text-secondary)", fontWeight: "400" }}>({todayScore.done}/{todayScore.applicable})</span>
+          </div>
+          <div style={{ fontSize: "11px", color: "#ef4444", marginTop: "2px" }}>
+            {todayScore.missed} habits missed / overdue
           </div>
         </div>
 
         <div className="glass-card" style={{ padding: "16px" }}>
-          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{currentMonthInfo.name} Rate</span>
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>{currentMonthInfo.name} Completion</span>
           <div style={{ fontSize: "28px", fontWeight: "800", color: "#8b5cf6", marginTop: "4px" }}>
             {currentMonthStats.pct}% <span style={{ fontSize: "14px", color: "var(--text-secondary)", fontWeight: "400" }}>({currentMonthStats.done} habits)</span>
           </div>
         </div>
 
         <div className="glass-card" style={{ padding: "16px" }}>
-          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Schedule Anchor</span>
-          <div style={{ fontSize: "18px", fontWeight: "700", color: "var(--text-primary)", marginTop: "6px" }}>
-            07:00 AM → 11:00 AM Desk
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>Interactive Legend</span>
+          <div style={{ display: "flex", gap: "12px", marginTop: "8px", fontSize: "12px" }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "12px", height: "12px", borderRadius: "3px", background: "#10b981", display: "inline-block" }}></span> Done (✓)</span>
+            <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><span style={{ width: "12px", height: "12px", borderRadius: "3px", background: "#ef4444", display: "inline-block" }}></span> Missed (✕)</span>
+          </div>
+          <div style={{ fontSize: "10px", color: "var(--text-secondary)", marginTop: "4px" }}>
+            Click any checkbox to cycle: Pending → Done → Missed
           </div>
         </div>
       </div>
@@ -407,7 +472,7 @@ export default function Home() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--border-color)", textAlign: "center" }}>
-                  <th className="sticky-col" style={{ padding: "14px 16px", textAlign: "left", minWidth: "260px" }}>HABIT</th>
+                  <th className="sticky-col" style={{ padding: "14px 16px", textAlign: "left", minWidth: "270px" }}>HABIT</th>
                   <th style={{ padding: "14px 8px", width: "70px", color: "var(--text-secondary)" }}>TIME</th>
                   {activeDays.map((d) => {
                     const isToday = d.dateStr === todayStr;
@@ -430,13 +495,13 @@ export default function Home() {
                     <td className="sticky-col" style={{ padding: "12px 16px", fontWeight: "500" }}>
                       {habit.name}
                     </td>
-                    <td style={{ padding: "12px 8px", textAlignment: "center", color: "var(--text-secondary)", fontSize: "11px", textAlign: "center" }}>
+                    <td style={{ padding: "12px 8px", color: "var(--text-secondary)", fontSize: "11px", textAlign: "center" }}>
                       {habit.time}
                     </td>
                     {activeDays.map((d) => {
                       const isToday = d.dateStr === todayStr;
                       const applies = habitApplies(habit.applies, d.dateObj);
-                      const isChecked = data[`${d.dateStr}_${habit.id}`];
+                      const cell = getCellState(d.dateStr, habit);
 
                       return (
                         <td
@@ -446,10 +511,15 @@ export default function Home() {
                         >
                           {applies ? (
                             <button
-                              onClick={() => toggleHabit(d.dateStr, habit.id)}
-                              className={`checkbox-btn ${isChecked ? "checked" : ""}`}
+                              onClick={() => toggleHabitState(d.dateStr, habit.id)}
+                              className={`checkbox-btn ${cell.state}`}
+                              title={`${habit.name} (${habit.time}) - Click to change state`}
                             >
-                              {isChecked && <span style={{ color: "#fff", fontSize: "13px", fontWeight: "bold" }}>✓</span>}
+                              {cell.icon && (
+                                <span style={{ color: "#fff", fontSize: "13px", fontWeight: "bold" }}>
+                                  {cell.icon}
+                                </span>
+                              )}
                             </button>
                           ) : (
                             <span style={{ color: "var(--text-secondary)", opacity: 0.3 }}>—</span>
@@ -469,8 +539,8 @@ export default function Home() {
                     const isToday = d.dateStr === todayStr;
                     return (
                       <td key={d.dateStr} className={isToday ? "today-col" : ""} style={{ padding: "12px 4px", textAlign: "center", fontSize: "11px" }}>
-                        <div style={{ color: score.pct >= 80 ? "#10b981" : score.pct >= 50 ? "#f59e0b" : "var(--text-secondary)" }}>
-                          {score.done}/{score.applicable}
+                        <div style={{ color: score.pct >= 80 ? "#10b981" : score.pct >= 50 ? "#f59e0b" : "#ef4444" }}>
+                          ✓{score.done} ✕{score.missed}
                         </div>
                         <div>{score.pct}%</div>
                       </td>
@@ -516,7 +586,7 @@ export default function Home() {
                         cx="45"
                         cy="45"
                         r="38"
-                        stroke={stats.pct >= 80 ? "#10b981" : stats.pct >= 50 ? "#8b5cf6" : "#f59e0b"}
+                        stroke={stats.pct >= 80 ? "#10b981" : stats.pct >= 50 ? "#8b5cf6" : "#ef4444"}
                         strokeWidth="8"
                         fill="transparent"
                         strokeDasharray={circumference}
@@ -530,8 +600,8 @@ export default function Home() {
                     </svg>
 
                     <div>
-                      <div style={{ fontSize: "13px", color: "var(--text-secondary)" }}>Completed</div>
-                      <div style={{ fontSize: "20px", fontWeight: "700" }}>{stats.done} habits</div>
+                      <div style={{ fontSize: "13px", color: "#10b981", fontWeight: "700" }}>✓ {stats.done} Done</div>
+                      <div style={{ fontSize: "13px", color: "#ef4444", fontWeight: "700", marginTop: "2px" }}>✕ {stats.missed} Missed</div>
                       <div style={{ fontSize: "11px", color: "var(--text-secondary)", marginTop: "4px" }}>out of {stats.applicable} possible</div>
                     </div>
                   </div>
@@ -584,7 +654,7 @@ export default function Home() {
               <li>Push this project directory to your GitHub repository.</li>
               <li>Go to <a href="https://vercel.com" target="_blank" rel="noreferrer" style={{ color: "#8b5cf6" }}>Vercel.com</a> and sign in.</li>
               <li>Click <strong>"Add New" → "Project"</strong> → Import your GitHub repository.</li>
-              <li>Click <strong>Deploy</strong> — your app will be live in 60 seconds!</li>
+              <li>Click <strong>Deploy</strong> — your app will be live in 45 seconds!</li>
             </ol>
           </div>
         </div>

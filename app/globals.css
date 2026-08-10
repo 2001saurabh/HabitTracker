@@ -8,6 +8,7 @@
   --accent-purple: #8b5cf6;
   --accent-purple-glow: rgba(139, 92, 246, 0.35);
   --accent-green: #10b981;
+  --accent-red: #ef4444;
   --accent-yellow: #f59e0b;
 }
 
@@ -21,6 +22,7 @@
   --accent-purple: #7c3aed;
   --accent-purple-glow: rgba(124, 58, 237, 0.15);
   --accent-green: #059669;
+  --accent-red: #dc2626;
   --accent-yellow: #d97706;
 }
 
@@ -78,11 +80,11 @@ body {
   box-shadow: 0 12px 40px 0 var(--accent-purple-glow);
 }
 
-/* Checkbox Animation */
+/* 3-State Checkbox Button */
 .checkbox-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
   border: 2px solid var(--border-color);
   display: flex;
   align-items: center;
@@ -95,17 +97,29 @@ body {
 
 .checkbox-btn:hover {
   border-color: var(--accent-purple);
-  transform: scale(1.1);
+  transform: scale(1.12);
 }
 
-.checkbox-btn.checked {
+.checkbox-btn.done {
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   border-color: #10b981;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+.checkbox-btn.missed {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  border-color: #ef4444;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+}
+
+.checkbox-btn.auto-missed {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #ef4444;
 }
 
 .checkbox-btn.na {
-  opacity: 0.25;
+  opacity: 0.2;
   cursor: not-allowed;
   border-color: transparent;
   background: rgba(255, 255, 255, 0.05);
